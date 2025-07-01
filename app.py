@@ -33,11 +33,11 @@ st.markdown("""
 # Correct:
 def connect_db():
     return mysql.connector.connect(
-        host='127.0.0.1',
-        user='root',
-        password='Datascience12.',
-        database='library',
-        port=3306
+        host=st.secrets["mysql"]["host"],
+        user=st.secrets["mysql"]["user"],
+        password=st.secrets["mysql"]["password"],
+        database=st.secrets["mysql"]["database"],
+        port=st.secrets["mysql"]["port"]
     )
 
 
