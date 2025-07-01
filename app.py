@@ -1,4 +1,3 @@
-# app.py (SQLite version)
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -34,7 +33,7 @@ st.markdown("""
 
 # --- Database Setup ---
 def init_db():
-    """Initialize SQLite database and create tables"""
+    """Initialize SQLite database and create tables with sample data"""
     conn = sqlite3.connect('library.db')
     c = conn.cursor()
     
@@ -134,6 +133,51 @@ def init_db():
         branches = [('Computer Science',), ('Electrical',), ('Mechanical',), ('Civil',)]
         c.executemany("INSERT INTO branches (branch) VALUES (?)", branches)
     
+    c.execute("SELECT COUNT(*) FROM users")
+    if c.fetchone()[0] == 0:
+        users = [('Admin User',), ('Librarian 1',), ('Librarian 2',)]
+        c.executemany("INSERT INTO users (name) VALUES (?)", users)
+    
+    # Insert sample books with copies
+    c.execute("SELECT COUNT(*) FROM books")
+    if c.fetchone()[0] == 0:
+        books = [
+            ('The Great Gatsby', 'F. Scott Fitzgerald', 'A classic novel of the Jazz Age', 1, 1),
+            ('To Kill a Mockingbird', 'Harper Lee', 'A novel about race and class in 1930s Alabama', 1, 1),
+            ('1984', 'George Orwell', 'Dystopian social science fiction novel', 3, 1),
+            ('A Brief History of Time', 'Stephen Hawking', 'Popular science book about cosmology', 3, 1),
+            ('Sapiens', 'Yuval Noah Harari', 'History of humankind', 2, 1)
+        ]
+        for book in books:
+            c.execute(
+                "INSERT INTO books (title, author, description, category_id, added_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                book
+            )
+            book_id = c.lastrowid
+            # Add 2 copies for each book
+            for _ in range(2):
+                c.execute(
+                    "INSERT INTO book_issue (book_id, added_by) VALUES (?, ?)",
+                    (book_id, 1)
+                )
+    
+    # Insert sample students
+    c.execute("SELECT COUNT(*) FROM students")
+    if c.fetchone()[0] == 0:
+        students = [
+            ('S001', 'John', 'Doe', 'john@example.com', 1, 1, 2023),
+            ('S002', 'Jane', 'Smith', 'jane@example.com', 1, 1, 2023),
+            ('S003', 'Robert', 'Johnson', 'robert@example.com', 2, 2, 2022),
+            ('S004', 'Emily', 'Williams', 'emily@example.com', 1, 3, 2023)
+        ]
+        for student in students:
+            c.execute(
+                "INSERT INTO students (roll_num, first_name, last_name, email_id, category, branch, year) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                student
+            )
+    
     conn.commit()
     return conn
 
@@ -194,15 +238,16 @@ elif choice == "📘 Book Management":
 
     with st.expander("➕ Add New Book"):
         with st.form("book_form"):
-            title = st.text_input("Title")
-            author = st.text_input("Author")
-            description = st.text_area("Description")
+            title = st.text_input("Title", value="The Catcher in the Rye")
+            author = st.text_input("Author", value="J.D. Salinger")
+            description = st.text_area("Description", value="Coming-of-age novel about teenage angst")
             c.execute("SELECT id, category FROM book_categories")
             categories = {cat[1]: cat[0] for cat in c.fetchall()}
-            category = st.selectbox("Category", options=categories.keys())
-            added_by = st.number_input("Added By (User ID)", min_value=1)
+            category = st.selectbox("Category", options=categories.keys(), index=0)
+            added_by = st.number_input("Added By (User ID)", min_value=1, value=1)
 
-            if st.form_submit_button("✅ Add Book"):
+            submit_button = st.form_submit_button("✅ Add Book")
+            if submit_button:
                 category_id = categories[category]
                 c.execute(
                     "INSERT INTO books (title, author, description, category_id, added_by) "
@@ -227,11 +272,9 @@ elif choice == "📤 Issue Management":
         with st.form("issue_form"):
             c.execute("SELECT issue_id, book_id FROM book_issue WHERE available_status = 1")
             available_issues = c.fetchall()
-            issue_options = {f"Book {issue[1]} (Copy {issue[0]})": issue[0] for issue in available_issues}
             
-            if not issue_options:
-                st.warning("No available copies")
-            else:
+            if available_issues:
+                issue_options = {f"Book {issue[1]} (Copy {issue[0]})": issue[0] for issue in available_issues}
                 issue_id = st.selectbox("Available Copies", options=list(issue_options.values()), 
                                         format_func=lambda x: list(issue_options.keys())[list(issue_options.values()).index(x)])
 
@@ -242,9 +285,10 @@ elif choice == "📤 Issue Management":
                                          format_func=lambda x: list(student_options.keys())[list(student_options.values()).index(x)])
 
                 issue_days = st.number_input("Issue Duration (Days)", min_value=1, value=14)
-                issued_by = st.number_input("Issued By (User ID)", min_value=1)
+                issued_by = st.number_input("Issued By (User ID)", min_value=1, value=1)
 
-                if st.form_submit_button("📤 Issue Book"):
+                submit_button = st.form_submit_button("📤 Issue Book")
+                if submit_button:
                     issue_date = datetime.now()
                     return_date = issue_date + timedelta(days=issue_days)
 
@@ -254,6 +298,9 @@ elif choice == "📤 Issue Management":
                     c.execute("UPDATE students SET books_issued = books_issued + 1 WHERE student_id = ?", (student_id,))
                     conn.commit()
                     st.success("✅ Book issued successfully!")
+            else:
+                st.warning("No available copies at the moment")
+                st.form_submit_button("📤 Issue Book", disabled=True)
 
     with st.expander("📥 Return Book"):
         with st.form("return_form"):
@@ -268,12 +315,14 @@ elif choice == "📤 Issue Management":
             issued_books = c.fetchall()
             if not issued_books:
                 st.warning("No books currently issued.")
+                st.form_submit_button("📥 Return Book", disabled=True)
             else:
                 issue_options = {f"{book[1]} to {book[2]} - {book[3]} {book[4]}": book[0] for book in issued_books}
                 log_id = st.selectbox("Issued Books", options=list(issue_options.values()), 
                                       format_func=lambda x: list(issue_options.keys())[list(issue_options.values()).index(x)])
 
-                if st.form_submit_button("📥 Return Book"):
+                submit_button = st.form_submit_button("📥 Return Book")
+                if submit_button:
                     c.execute("SELECT book_issue_id, student_id FROM book_issue_log WHERE id = ?", (log_id,))
                     log_entry = c.fetchone()
                     c.execute("UPDATE book_issue SET available_status = 1 WHERE issue_id = ?", (log_entry[0],))
@@ -302,22 +351,23 @@ elif choice == "👨‍🎓 Student Management":
 
     with st.expander("➕ Add New Student"):
         with st.form("student_form"):
-            first_name = st.text_input("First Name")
-            last_name = st.text_input("Last Name")
-            roll_num = st.text_input("Roll Number")
-            email = st.text_input("Email")
+            first_name = st.text_input("First Name", value="Alex")
+            last_name = st.text_input("Last Name", value="Johnson")
+            roll_num = st.text_input("Roll Number", value="S005")
+            email = st.text_input("Email", value="alex@example.com")
 
             c.execute("SELECT cat_id, category FROM student_categories")
             categories = {cat[1]: cat[0] for cat in c.fetchall()}
-            category = st.selectbox("Category", options=categories.keys())
+            category = st.selectbox("Category", options=categories.keys(), index=0)
 
             c.execute("SELECT id, branch FROM branches")
             branches = {branch[1]: branch[0] for branch in c.fetchall()}
-            branch = st.selectbox("Branch", options=branches.keys())
+            branch = st.selectbox("Branch", options=branches.keys(), index=0)
 
             year = st.number_input("Year", min_value=1900, max_value=2100, value=datetime.now().year)
 
-            if st.form_submit_button("✅ Add Student"):
+            submit_button = st.form_submit_button("✅ Add Student")
+            if submit_button:
                 category_id = categories[category]
                 branch_id = branches[branch]
                 c.execute(
@@ -377,7 +427,7 @@ elif choice == "📊 Reports":
         else:
             st.warning("No borrowing data found.")
 
-    # 3. �‍💼 Librarian Performance
+    # 3. 🧑‍💼 Librarian Performance
     with tab3:
         st.subheader("🧑‍💼 Librarian Performance")
         c.execute("""
