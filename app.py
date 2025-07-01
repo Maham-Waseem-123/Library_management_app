@@ -1,7 +1,9 @@
+# app.py (SQLite version)
 import streamlit as st
-import mysql.connector
+import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
+import os
 
 # --- Custom Styles ---
 st.markdown("""
@@ -30,16 +32,114 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Correct:
-def connect_db():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+# --- Database Setup ---
+def init_db():
+    """Initialize SQLite database and create tables"""
+    conn = sqlite3.connect('library.db')
+    c = conn.cursor()
+    
+    # Create tables if not exists
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS book_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL
     )
+    """)
+    
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS books (
+        book_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        author TEXT NOT NULL,
+        description TEXT NOT NULL,
+        category_id INTEGER NOT NULL,
+        added_by INTEGER NOT NULL,
+        added_at_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS book_issue (
+        issue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        available_status INTEGER NOT NULL DEFAULT 1,
+        added_by INTEGER NOT NULL,
+        added_at_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS book_issue_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_issue_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        issue_by INTEGER NOT NULL,
+        issued_at TIMESTAMP NOT NULL,
+        return_time TIMESTAMP NOT NULL,
+        time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS students (
+        student_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        roll_num TEXT NOT NULL,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        email_id TEXT,
+        category INTEGER,
+        branch INTEGER,
+        year INTEGER,
+        books_issued INTEGER DEFAULT 0,
+        approved INTEGER DEFAULT 0,
+        rejected INTEGER DEFAULT 0
+    )
+    """)
+    
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS student_categories (
+        cat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        max_allowed INTEGER DEFAULT 5
+    )
+    """)
+    
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS branches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch TEXT NOT NULL
+    )
+    """)
+    
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL
+    )
+    """)
+    
+    # Insert sample data if tables are empty
+    c.execute("SELECT COUNT(*) FROM book_categories")
+    if c.fetchone()[0] == 0:
+        categories = [('Fiction',), ('Non-Fiction',), ('Science',), ('History',)]
+        c.executemany("INSERT INTO book_categories (category) VALUES (?)", categories)
+    
+    c.execute("SELECT COUNT(*) FROM student_categories")
+    if c.fetchone()[0] == 0:
+        student_cats = [('Undergraduate', 5), ('Graduate', 7), ('Faculty', 10)]
+        c.executemany("INSERT INTO student_categories (category, max_allowed) VALUES (?, ?)", student_cats)
+    
+    c.execute("SELECT COUNT(*) FROM branches")
+    if c.fetchone()[0] == 0:
+        branches = [('Computer Science',), ('Electrical',), ('Mechanical',), ('Civil',)]
+        c.executemany("INSERT INTO branches (branch) VALUES (?)", branches)
+    
+    conn.commit()
+    return conn
 
+# Database connection
+def connect_db():
+    return init_db()
 
 # --- Sidebar ---
 st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2991/2991108.png", width=100)
@@ -50,21 +150,21 @@ menu = ["🏠 Home", "📘 Book Management", "📤 Issue Management", "👨‍�
 choice = st.sidebar.radio("Navigation", menu)
 
 conn = connect_db()
-cursor = conn.cursor()
+c = conn.cursor()
 
 # --- Home ---
 if choice == "🏠 Home":
     st.markdown("## 🏫 Welcome to the Library Dashboard")
     st.markdown("---")
 
-    cursor.execute("SELECT COUNT(*) FROM books")
-    book_count = cursor.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM books")
+    book_count = c.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM students")
-    student_count = cursor.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM students")
+    student_count = c.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM book_issue WHERE available_status = 1")
-    available_books = cursor.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM book_issue WHERE available_status = 1")
+    available_books = c.fetchone()[0]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("📚 Total Books", book_count)
@@ -81,12 +181,12 @@ elif choice == "📘 Book Management":
 
     search_term = st.text_input("🔍 Search Books (Title/Author)")
     if search_term:
-        cursor.execute(
+        c.execute(
             "SELECT book_id, title, author, category_id FROM books "
-            "WHERE title LIKE %s OR author LIKE %s",
+            "WHERE title LIKE ? OR author LIKE ?",
             (f'%{search_term}%', f'%{search_term}%')
         )
-        books = cursor.fetchall()
+        books = c.fetchall()
         if books:
             st.dataframe(pd.DataFrame(books, columns=["ID", "Title", "Author", "Category ID"]))
         else:
@@ -97,17 +197,23 @@ elif choice == "📘 Book Management":
             title = st.text_input("Title")
             author = st.text_input("Author")
             description = st.text_area("Description")
-            cursor.execute("SELECT id, category FROM book_categories")
-            categories = {cat[1]: cat[0] for cat in cursor.fetchall()}
+            c.execute("SELECT id, category FROM book_categories")
+            categories = {cat[1]: cat[0] for cat in c.fetchall()}
             category = st.selectbox("Category", options=categories.keys())
             added_by = st.number_input("Added By (User ID)", min_value=1)
 
             if st.form_submit_button("✅ Add Book"):
                 category_id = categories[category]
-                cursor.execute(
+                c.execute(
                     "INSERT INTO books (title, author, description, category_id, added_by) "
-                    "VALUES (%s, %s, %s, %s, %s)",
+                    "VALUES (?, ?, ?, ?, ?)",
                     (title, author, description, category_id, added_by)
+                )
+                # Add a copy to book_issue
+                book_id = c.lastrowid
+                c.execute(
+                    "INSERT INTO book_issue (book_id, added_by) VALUES (?, ?)",
+                    (book_id, added_by)
                 )
                 conn.commit()
                 st.success("✅ Book added successfully!")
@@ -119,33 +225,39 @@ elif choice == "📤 Issue Management":
 
     with st.expander("📦 Issue Book"):
         with st.form("issue_form"):
-            cursor.execute("SELECT issue_id, book_id FROM book_issue WHERE available_status = 1")
-            available_issues = cursor.fetchall()
+            c.execute("SELECT issue_id, book_id FROM book_issue WHERE available_status = 1")
+            available_issues = c.fetchall()
             issue_options = {f"Book {issue[1]} (Copy {issue[0]})": issue[0] for issue in available_issues}
-            issue_id = st.selectbox("Available Copies", options=list(issue_options.values()), format_func=lambda x: list(issue_options.keys())[list(issue_options.values()).index(x)])
+            
+            if not issue_options:
+                st.warning("No available copies")
+            else:
+                issue_id = st.selectbox("Available Copies", options=list(issue_options.values()), 
+                                        format_func=lambda x: list(issue_options.keys())[list(issue_options.values()).index(x)])
 
-            cursor.execute("SELECT student_id, roll_num, CONCAT(first_name, ' ', last_name) FROM students")
-            students = cursor.fetchall()
-            student_options = {f"{s[1]} - {s[2]}": s[0] for s in students}
-            student_id = st.selectbox("Student", options=list(student_options.values()), format_func=lambda x: list(student_options.keys())[list(student_options.values()).index(x)])
+                c.execute("SELECT student_id, roll_num, first_name || ' ' || last_name FROM students")
+                students = c.fetchall()
+                student_options = {f"{s[1]} - {s[2]}": s[0] for s in students}
+                student_id = st.selectbox("Student", options=list(student_options.values()), 
+                                         format_func=lambda x: list(student_options.keys())[list(student_options.values()).index(x)])
 
-            issue_days = st.number_input("Issue Duration (Days)", min_value=1, value=14)
-            issued_by = st.number_input("Issued By (User ID)", min_value=1)
+                issue_days = st.number_input("Issue Duration (Days)", min_value=1, value=14)
+                issued_by = st.number_input("Issued By (User ID)", min_value=1)
 
-            if st.form_submit_button("📤 Issue Book"):
-                issue_date = datetime.now()
-                return_date = issue_date + timedelta(days=issue_days)
+                if st.form_submit_button("📤 Issue Book"):
+                    issue_date = datetime.now()
+                    return_date = issue_date + timedelta(days=issue_days)
 
-                cursor.execute("UPDATE book_issue SET available_status = 0 WHERE issue_id = %s", (issue_id,))
-                cursor.execute("INSERT INTO book_issue_log (book_issue_id, student_id, issue_by, issued_at, return_time) VALUES (%s, %s, %s, %s, %s)",
+                    c.execute("UPDATE book_issue SET available_status = 0 WHERE issue_id = ?", (issue_id,))
+                    c.execute("INSERT INTO book_issue_log (book_issue_id, student_id, issue_by, issued_at, return_time) VALUES (?, ?, ?, ?, ?)",
                                (issue_id, student_id, issued_by, issue_date.strftime('%Y-%m-%d %H:%M:%S'), return_date.strftime('%Y-%m-%d %H:%M:%S')))
-                cursor.execute("UPDATE students SET books_issued = books_issued + 1 WHERE student_id = %s", (student_id,))
-                conn.commit()
-                st.success("✅ Book issued successfully!")
+                    c.execute("UPDATE students SET books_issued = books_issued + 1 WHERE student_id = ?", (student_id,))
+                    conn.commit()
+                    st.success("✅ Book issued successfully!")
 
     with st.expander("📥 Return Book"):
         with st.form("return_form"):
-            cursor.execute(
+            c.execute(
                 "SELECT l.id, b.title, s.roll_num, s.first_name, s.last_name "
                 "FROM book_issue_log l "
                 "JOIN book_issue i ON l.book_issue_id = i.issue_id "
@@ -153,18 +265,19 @@ elif choice == "📤 Issue Management":
                 "JOIN students s ON l.student_id = s.student_id "
                 "WHERE i.available_status = 0"
             )
-            issued_books = cursor.fetchall()
+            issued_books = c.fetchall()
             if not issued_books:
                 st.warning("No books currently issued.")
             else:
                 issue_options = {f"{book[1]} to {book[2]} - {book[3]} {book[4]}": book[0] for book in issued_books}
-                log_id = st.selectbox("Issued Books", options=list(issue_options.values()), format_func=lambda x: list(issue_options.keys())[list(issue_options.values()).index(x)])
+                log_id = st.selectbox("Issued Books", options=list(issue_options.values()), 
+                                      format_func=lambda x: list(issue_options.keys())[list(issue_options.values()).index(x)])
 
                 if st.form_submit_button("📥 Return Book"):
-                    cursor.execute("SELECT book_issue_id, student_id FROM book_issue_log WHERE id = %s", (log_id,))
-                    log_entry = cursor.fetchone()
-                    cursor.execute("UPDATE book_issue SET available_status = 1 WHERE issue_id = %s", (log_entry[0],))
-                    cursor.execute("UPDATE students SET books_issued = books_issued - 1 WHERE student_id = %s", (log_entry[1],))
+                    c.execute("SELECT book_issue_id, student_id FROM book_issue_log WHERE id = ?", (log_id,))
+                    log_entry = c.fetchone()
+                    c.execute("UPDATE book_issue SET available_status = 1 WHERE issue_id = ?", (log_entry[0],))
+                    c.execute("UPDATE students SET books_issued = books_issued - 1 WHERE student_id = ?", (log_entry[1],))
                     conn.commit()
                     st.success("✅ Book returned successfully!")
 
@@ -173,7 +286,7 @@ elif choice == "👨‍🎓 Student Management":
     st.markdown("## 👨‍🎓 Student Management")
     st.markdown("---")
 
-    cursor.execute(
+    c.execute(
         "SELECT s.student_id, s.roll_num, s.first_name, s.last_name, "
         "c.category, b.branch, s.books_issued, "
         "CASE WHEN s.approved = 1 THEN 'Approved' WHEN s.rejected = 1 THEN 'Rejected' ELSE 'Pending' END AS status "
@@ -181,7 +294,7 @@ elif choice == "👨‍🎓 Student Management":
         "JOIN student_categories c ON s.category = c.cat_id "
         "JOIN branches b ON s.branch = b.id"
     )
-    students = cursor.fetchall()
+    students = c.fetchall()
     if students:
         st.dataframe(pd.DataFrame(students, columns=["ID", "Roll No", "First Name", "Last Name", "Category", "Branch", "Books Issued", "Status"]))
     else:
@@ -194,12 +307,12 @@ elif choice == "👨‍🎓 Student Management":
             roll_num = st.text_input("Roll Number")
             email = st.text_input("Email")
 
-            cursor.execute("SELECT cat_id, category FROM student_categories")
-            categories = {cat[1]: cat[0] for cat in cursor.fetchall()}
+            c.execute("SELECT cat_id, category FROM student_categories")
+            categories = {cat[1]: cat[0] for cat in c.fetchall()}
             category = st.selectbox("Category", options=categories.keys())
 
-            cursor.execute("SELECT id, branch FROM branches")
-            branches = {branch[1]: branch[0] for branch in cursor.fetchall()}
+            c.execute("SELECT id, branch FROM branches")
+            branches = {branch[1]: branch[0] for branch in c.fetchall()}
             branch = st.selectbox("Branch", options=branches.keys())
 
             year = st.number_input("Year", min_value=1900, max_value=2100, value=datetime.now().year)
@@ -207,9 +320,9 @@ elif choice == "👨‍🎓 Student Management":
             if st.form_submit_button("✅ Add Student"):
                 category_id = categories[category]
                 branch_id = branches[branch]
-                cursor.execute(
+                c.execute(
                     "INSERT INTO students (first_name, last_name, roll_num, email_id, category, branch, year) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (first_name, last_name, roll_num, email, category_id, branch_id, year)
                 )
                 conn.commit()
@@ -224,18 +337,18 @@ elif choice == "📊 Reports":
     # 1. 📕 Overdue Books
     with tab1:
         st.subheader("📕 Overdue Books")
-        cursor.execute("""
-            SELECT b.title, s.roll_num, CONCAT(s.first_name, ' ', s.last_name) AS student_name,
+        c.execute("""
+            SELECT b.title, s.roll_num, s.first_name || ' ' || s.last_name AS student_name,
                    l.issued_at, l.return_time,
-                   DATEDIFF(CURDATE(), STR_TO_DATE(l.return_time, '%Y-%m-%d %H:%i:%s')) AS days_overdue
+                   (julianday('now') - julianday(l.return_time)) AS days_overdue
             FROM book_issue_log l
             JOIN book_issue i ON l.book_issue_id = i.issue_id
             JOIN books b ON i.book_id = b.book_id
             JOIN students s ON l.student_id = s.student_id
-            WHERE STR_TO_DATE(l.return_time, '%Y-%m-%d %H:%i:%s') < CURDATE()
+            WHERE l.return_time < datetime('now')
               AND i.available_status = 0
         """)
-        overdue = cursor.fetchall()
+        overdue = c.fetchall()
         if overdue:
             df = pd.DataFrame(overdue, columns=["Book Title", "Roll No", "Student Name", "Issued At", "Return By", "Days Overdue"])
             st.dataframe(df)
@@ -248,14 +361,14 @@ elif choice == "📊 Reports":
     # 2. ⛔ Borrowing Limits
     with tab2:
         st.subheader("⛔ Borrowing Limits")
-        cursor.execute("""
+        c.execute("""
             SELECT c.category, c.max_allowed, COUNT(s.student_id) AS students,
                    SUM(CASE WHEN s.books_issued >= c.max_allowed THEN 1 ELSE 0 END) AS exceeded_limit
             FROM student_categories c
             LEFT JOIN students s ON c.cat_id = s.category
             GROUP BY c.cat_id, c.category, c.max_allowed
         """)
-        limits = cursor.fetchall()
+        limits = c.fetchall()
         if limits:
             df = pd.DataFrame(limits, columns=["Category", "Max Allowed", "Total Students", "Exceeded Limit"])
             st.dataframe(df)
@@ -264,10 +377,10 @@ elif choice == "📊 Reports":
         else:
             st.warning("No borrowing data found.")
 
-    # 3. 🧑‍💼 Librarian Performance
+    # 3. �‍💼 Librarian Performance
     with tab3:
         st.subheader("🧑‍💼 Librarian Performance")
-        cursor.execute("""
+        c.execute("""
             SELECT u.name, COUNT(l.id) AS books_issued,
                    SUM(CASE WHEN i.available_status = 0 THEN 1 ELSE 0 END) AS currently_borrowed
             FROM book_issue_log l
@@ -275,7 +388,7 @@ elif choice == "📊 Reports":
             JOIN book_issue i ON l.book_issue_id = i.issue_id
             GROUP BY u.id, u.name
         """)
-        performance = cursor.fetchall()
+        performance = c.fetchall()
         if performance:
             df = pd.DataFrame(performance, columns=["Librarian", "Total Issued", "Currently Borrowed"])
             st.dataframe(df)
@@ -286,5 +399,4 @@ elif choice == "📊 Reports":
 
 
 # --- Close connections ---
-cursor.close()
 conn.close()
