@@ -30,14 +30,16 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Database connection ---
+# Correct:
 def connect_db():
     return mysql.connector.connect(
-        host='localhost',
+        host='127.0.0.1',
         user='root',
         password='Datascience12.',
-        database='library'
+        database='library',
+        port=3306
     )
+
 
 # --- Sidebar ---
 st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2991/2991108.png", width=100)
